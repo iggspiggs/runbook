@@ -1,0 +1,51 @@
+{
+  "name": "@runbook/sdk",
+  "version": "0.1.0",
+  "description": "JavaScript/TypeScript SDK for annotating automation rules for the Runbook registry",
+  "main": "src/index.js",
+  "module": "src/index.js",
+  "types": "src/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./src/index.js",
+      "require": "./src/index.cjs",
+      "types": "./src/index.d.ts"
+    }
+  },
+  "files": [
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test src/__tests__/*.test.js",
+    "lint": "eslint src/",
+    "format": "prettier --write src/"
+  },
+  "keywords": [
+    "automation",
+    "rules",
+    "registry",
+    "runbook",
+    "observability",
+    "sdk"
+  ],
+  "author": "Runbook <sdk@runbook.io>",
+  "license": "MIT",
+  "homepage": "https://docs.runbook.io/sdk/js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/runbook-io/runbook-sdk-js.git"
+  },
+  "bugs": {
+    "url": "https://github.com/runbook-io/runbook-sdk-js/issues"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "eslint": "^8.0.0",
+    "prettier": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

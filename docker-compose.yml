@@ -1,0 +1,65 @@
+services:
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-runbook}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-runbook}
+      POSTGRES_DB: ${POSTGRES_DB:-runbook}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-runbook} -d ${POSTGRES_DB:-runbook}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # ── FastAPI Backend ───────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-runbook}:${POSTGRES_PASSWORD:-runbook}@postgres:5432/${POSTGRES_DB:-runbook}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      SECRET_KEY: ${SECRET_KEY:-dev-secret-change-in-production}
+      ENV: ${ENV:-dev}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount the entire backend directory so --reload picks up all changes
+      - ./backend:/app
+      # Prevent the container's installed packages from being shadowed by the mount
+      - /app/.venv
+    command: ["/app/start.sh"]
+
+  # ── React / Vite Frontend ─────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      # Used by the Vite dev server proxy so it reaches the backend container
+      VITE_API_URL: http://backend:8000
+    ports:
+      - "5173:5173"
+    volumes:
+      # Hot-reload: only mount src so node_modules stays from the image build
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+
+volumes:
+  postgres_data:

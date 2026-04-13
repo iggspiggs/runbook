@@ -1,0 +1,112 @@
+# Production overrides — used on top of docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
+#
+# Key differences from dev:
+#   - No source volume mounts (images are self-contained)
+#   - No --reload on uvicorn
+#   - Backend runs gunicorn + uvicorn workers
+#   - Frontend serves pre-built static assets via nginx
+#   - Redis added for job queue / caching
+#   - Health checks and resource limits on all services
+
+services:
+
+  postgres:
+    healthcheck:
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-changeme}"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--pass", "${REDIS_PASSWORD:-changeme}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
+  backend:
+    # In production the image is self-contained — no source volume mounts.
+    volumes: []
+    environment:
+      ENV: prod
+      REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+    # Override the dev start.sh command with gunicorn + uvicorn workers.
+    # Migrations still run first via the shell one-liner.
+    command:
+      - /bin/bash
+      - -c
+      - |
+        echo "Running database migrations..."
+        alembic upgrade head
+        echo "Starting production server..."
+        exec gunicorn app.main:app \
+          --worker-class uvicorn.workers.UvicornWorker \
+          --workers 4 \
+          --bind 0.0.0.0:8000 \
+          --timeout 120 \
+          --access-logfile - \
+          --error-logfile -
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import httpx; r = httpx.get('http://localhost:8000/health', timeout=5); r.raise_for_status()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1G
+
+  frontend:
+    # In production we build static assets and serve via nginx.
+    # The dev Dockerfile CMD is replaced entirely.
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    volumes: []
+    environment:
+      # Not used at runtime (nginx serves static files), kept for reference.
+      VITE_API_URL: ""
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+
+volumes:
+  redis_data:
