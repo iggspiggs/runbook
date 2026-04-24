@@ -720,91 +720,62 @@ export default function GraphPage() {
     setSelectedRule(rule)
   }, [])
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full text-slate-400">
-        <RefreshCw size={20} className="animate-spin mr-2" />
-        Building process graph...
-      </div>
-    )
-  }
-
   return (
-    <div className="flex flex-col h-full">
-      {/* Toolbar */}
-      <div className="flex-shrink-0 px-4 py-3 border-b border-slate-200 bg-white flex items-center gap-3 flex-wrap">
-        {/* View mode toggle */}
-        <div className="flex items-center bg-slate-100 rounded-lg p-0.5">
+    <>
+      <header className="page-head">
+        <div>
+          <div className="folio">§ III · Process Flow</div>
+          <h1>Process <em>flow</em></h1>
+          <div className="lede">
+            How rules depend on one another. Columns are departments; color indicates risk tier.
+          </div>
+        </div>
+        <div className="head-actions">
           <button
+            className={`btn sm ${viewMode === VIEW_PIPELINE ? 'primary' : ''}`}
             onClick={() => setViewMode(VIEW_PIPELINE)}
-            className={clsx(
-              'flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md transition-all',
-              viewMode === VIEW_PIPELINE
-                ? 'bg-white text-slate-800 shadow-sm'
-                : 'text-slate-500 hover:text-slate-700'
-            )}
           >
-            <Rows3 size={13} />
             Pipeline
           </button>
           <button
+            className={`btn sm ${viewMode === VIEW_DAG ? 'primary' : ''}`}
             onClick={() => setViewMode(VIEW_DAG)}
-            className={clsx(
-              'flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md transition-all',
-              viewMode === VIEW_DAG
-                ? 'bg-white text-slate-800 shadow-sm'
-                : 'text-slate-500 hover:text-slate-700'
-            )}
           >
-            <GitBranch size={13} />
             DAG
           </button>
+          <button className="btn sm" onClick={loadData} title="Reload">Reload</button>
         </div>
+      </header>
 
-        <div className="w-px h-5 bg-slate-200" />
-
-        {/* Department filter (DAG view only) */}
-        {viewMode === VIEW_DAG && (
-          <>
-            <div className="flex items-center gap-2">
-              <LayoutGrid size={14} className="text-slate-400" />
-              <span className="text-xs font-semibold text-slate-600 uppercase tracking-wide">
-                Dept
-              </span>
-            </div>
+      {viewMode === VIEW_DAG && (
+        <div className="pf-legend">
+          <span><span className="sw" style={{ background: 'var(--risk-crit)' }} />Critical</span>
+          <span><span className="sw" style={{ background: 'var(--risk-high)' }} />High</span>
+          <span><span className="sw" style={{ background: 'var(--risk-med)' }} />Medium</span>
+          <span><span className="sw" style={{ background: 'var(--risk-low)' }} />Low</span>
+          <div className="l-row gap8" style={{ marginLeft: 'auto', flexWrap: 'wrap' }}>
+            <span className="dim" style={{ fontSize: 11.5, marginRight: 4 }}>Dept:</span>
             <DeptFilter
               departments={departments}
               active={deptFilter}
               onChange={setDeptFilter}
             />
-          </>
-        )}
-
-        <div className="ml-auto flex items-center gap-2 text-xs text-slate-400">
-          {viewMode === VIEW_DAG && (
-            <>
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-3 h-0.5 bg-slate-400 rounded" />
-                Upstream
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-3 h-0.5 bg-slate-500 rounded" />
-                Downstream
-              </span>
-            </>
-          )}
-          <button
-            onClick={loadData}
-            className="ml-2 flex items-center gap-1 px-2 py-1 rounded border border-slate-200 hover:bg-slate-50 transition-colors"
-          >
-            <RefreshCw size={11} />
-            Reload
-          </button>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Content area */}
-      <div className="flex-1 relative">
+      {loading ? (
+        <div
+          className="l-card"
+          style={{ padding: 60, textAlign: 'center', color: 'var(--ink-3)' }}
+        >
+          Building process graph…
+        </div>
+      ) : (
+      <div
+        className="l-card"
+        style={{ padding: 0, overflow: 'hidden', height: 640, position: 'relative' }}
+      >
         {/* ---- DAG VIEW ---- */}
         {viewMode === VIEW_DAG && (
           <ReactFlow
@@ -864,6 +835,7 @@ export default function GraphPage() {
           />
         )}
       </div>
-    </div>
+      )}
+    </>
   )
 }

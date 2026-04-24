@@ -69,11 +69,21 @@ def create_app() -> FastAPI:
     from .routers.extraction import router as extraction_router
     from .routers.audit import router as audit_router
     from .routers.simulation import router as simulation_router
+    from .routers.file_access import router as file_access_router
+    from .routers.users import router as users_router
+    from .routers.governance import router as governance_router
+    from .routers.compliance import router as compliance_router
+    from .routers.agent_logs import router as agent_logs_router
 
     app.include_router(registry_router)
     app.include_router(extraction_router)
     app.include_router(audit_router)
     app.include_router(simulation_router)
+    app.include_router(file_access_router)
+    app.include_router(users_router)
+    app.include_router(governance_router)
+    app.include_router(compliance_router)
+    app.include_router(agent_logs_router)
 
     # ── Built-in endpoints ────────────────────────────────────────────────────
     @app.get("/api/tenants/demo", tags=["tenants"], summary="Get demo tenant")

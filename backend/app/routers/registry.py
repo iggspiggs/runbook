@@ -16,6 +16,17 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.registry.rule_service import RuleService
+from app.services.governance import (
+    ApprovalService,
+    FreezeBlock,
+    ReasonPolicyError,
+    can_edit_rule,
+    check_freeze_windows,
+    check_reason_policy,
+    requires_approval,
+)
+from app.deps import get_current_user_optional
+from app.models.user import User
 from app.db import get_db  # async session dependency — defined in app/db.py
 
 router = APIRouter(prefix="/api/rules", tags=["registry"])
@@ -35,6 +46,10 @@ class EditableFieldUpdate(BaseModel):
     reason: Optional[str] = Field(
         None,
         description="Human-readable reason recorded in the audit log.",
+    )
+    ticket_ref: Optional[str] = Field(
+        None,
+        description="Ticket reference (JIRA-123 / LINEAR-456 / #789) — required for high/critical risk.",
     )
     changed_by: str = Field(
         ...,
@@ -125,19 +140,81 @@ async def update_editable(
     body: EditableFieldUpdate,
     tenant_id: str = Query(...),
     service: RuleService = Depends(get_rule_service),
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ) -> Dict[str, Any]:
     """
-    Accepts a map of field_name → new_value.  The service validates each
-    value against the declared type of the editable field and rejects unknown
-    or non-editable fields with a 422. Every accepted change is written to
-    the audit log atomically with the rule update.
+    Governance-gated edit. Low/medium risk → applied immediately (with reason
+    enforcement + freeze check). High/critical risk → returns 202 with a
+    pending_change_id to route through the approval queue.
     """
+    rule = await service.get_rule(tenant_id, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rule not found")
+
+    # --- permission check (skipped when no X-User-Id, to keep existing CLI/test usage working)
+    user_roles = current_user.roles if current_user else []
+    if current_user is not None and not can_edit_rule(user_roles):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="editor or admin role required to change rule fields",
+        )
+
+    # --- reason policy
+    try:
+        check_reason_policy(
+            risk_level=rule.risk_level,
+            reason=body.reason,
+            ticket_ref=body.ticket_ref,
+        )
+    except ReasonPolicyError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+
+    # --- freeze window check (only enforced when we know the user's roles)
+    if current_user is not None:
+        try:
+            await check_freeze_windows(
+                db,
+                tenant_id=tenant_id,
+                rule=rule,
+                user_roles=user_roles,
+            )
+        except FreezeBlock as exc:
+            raise HTTPException(status_code=status.HTTP_423_LOCKED, detail=str(exc))
+
+    # --- high/critical → route through approvals
+    if requires_approval(rule.risk_level):
+        if current_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="sign-in required to propose a high-risk change",
+            )
+        approvals = ApprovalService(db)
+        pc = await approvals.create_pending_change(
+            tenant_id=rule.tenant_id,
+            rule=rule,
+            changes=body.changes,
+            requested_by=current_user,
+            reason=body.reason,
+            ticket_ref=body.ticket_ref,
+        )
+        return {
+            "status": "pending_approval",
+            "pending_change_id": str(pc.id),
+            "approvals_required": pc.approvals_required,
+            "detail": (
+                f"{rule.risk_level} risk rule requires {pc.approvals_required} "
+                f"approval(s). The change is queued."
+            ),
+        }
+
+    # --- low / medium → apply directly
     try:
         updated_rule = await service.update_editable(
             tenant_id=tenant_id,
             rule_id=rule_id,
             field_updates=body.changes,
-            changed_by=body.changed_by,
+            changed_by=(current_user.email if current_user else body.changed_by),
             reason=body.reason,
         )
     except ValueError as exc:

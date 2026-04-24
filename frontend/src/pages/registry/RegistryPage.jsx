@@ -1,297 +1,103 @@
-import React, { useEffect, useCallback, useState } from 'react'
-import {
-  Search, ChevronUp, ChevronDown, ChevronsUpDown,
-  X, SlidersHorizontal, RefreshCw, CheckSquare,
-} from 'lucide-react'
-import clsx from 'clsx'
+import React, { useEffect, useState, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import useRegistryStore from '../../stores/registryStore.js'
-import RiskBadge from '../../components/common/RiskBadge.jsx'
-import StatusBadge from '../../components/common/StatusBadge.jsx'
 import RuleDrawer from './RuleDrawer.jsx'
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
 
 const DEPARTMENTS = ['Order Intake', 'Fulfillment', 'Shipping', 'Billing', 'Notifications', 'Analytics', 'Compliance']
 const STATUSES    = ['active', 'paused', 'planned', 'deferred']
 const RISK_LEVELS = ['low', 'medium', 'high', 'critical']
 
-const COLUMNS = [
-  { key: 'rule_id',      label: 'Rule ID',    sortable: true,  width: 'w-28' },
-  { key: 'title',        label: 'Title',      sortable: true,  width: 'flex-1' },
-  { key: 'department',   label: 'Dept',       sortable: true,  width: 'w-28' },
-  { key: 'status',       label: 'Status',     sortable: true,  width: 'w-24' },
-  { key: 'risk_level',   label: 'Risk',       sortable: true,  width: 'w-24' },
-  { key: 'owner',        label: 'Owner',      sortable: true,  width: 'w-32' },
-  { key: 'last_changed', label: 'Changed',    sortable: true,  width: 'w-28' },
-  { key: 'verified',     label: 'Verified',   sortable: false, width: 'w-20' },
-]
-
-// ---------------------------------------------------------------------------
-// Mock data (used when API is unavailable)
-// ---------------------------------------------------------------------------
 const MOCK_RULES = Array.from({ length: 24 }, (_, i) => {
-  const depts     = DEPARTMENTS
-  const statuses  = STATUSES
-  const risks     = RISK_LEVELS
-  const dept      = depts[i % depts.length]
-  const prefix    = dept.slice(0, 3).toUpperCase()
-  const padded    = String(i + 1).padStart(3, '0')
+  const dept = DEPARTMENTS[i % DEPARTMENTS.length]
+  const prefix = dept.slice(0, 3).toUpperCase()
   return {
-    rule_id:      `${prefix}-${padded}`,
+    rule_id:      `${prefix}-${String(i + 1).padStart(3, '0')}`,
     title:        `${dept} automation rule #${i + 1}`,
     department:   dept,
-    status:       statuses[i % statuses.length],
-    risk_level:   risks[i % risks.length],
+    status:       STATUSES[i % STATUSES.length],
+    risk_level:   RISK_LEVELS[i % RISK_LEVELS.length],
     owner:        ['alice@co.com', 'bob@co.com', 'carol@co.com', 'system'][i % 4],
     last_changed: new Date(Date.now() - i * 3_600_000 * 7).toISOString(),
     verified:     i % 3 !== 0,
   }
 })
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function timeAgo(isoString) {
-  if (!isoString) return '—'
-  const diff = Date.now() - new Date(isoString).getTime()
-  const days = Math.floor(diff / 86_400_000)
-  if (days === 0) return 'Today'
-  if (days === 1) return 'Yesterday'
-  if (days < 30) return `${days}d ago`
-  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(new Date(isoString))
+const Ic = {
+  search:  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5l3 3"/></svg>,
+  x:       <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M3 3l6 6M9 3l-6 6"/></svg>,
+  down:    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 4.5l3 3 3-3"/></svg>,
+  check:   <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M2 6.5l2.5 2.5L10 3.5"/></svg>,
+  sort:    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M5 2v6M3 6l2 2 2-2M3 4l2-2 2 2"/></svg>,
+  refresh: <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M13 7a5 5 0 1 0-1.5 3.5M13 3v3h-3"/></svg>,
+  plus:    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M8 3v10M3 8h10"/></svg>,
 }
 
-// ---------------------------------------------------------------------------
-// Filter bar
-// ---------------------------------------------------------------------------
+function timeAgo(iso) {
+  if (!iso) return '—'
+  const diff = Date.now() - new Date(iso).getTime()
+  const days = Math.floor(diff / 86_400_000)
+  if (days <= 0) return 'Today'
+  if (days === 1) return 'Yesterday'
+  if (days < 30) return `${days}d ago`
+  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(new Date(iso))
+}
 
-function FilterBar({ filters, onUpdate, onClear, loading }) {
-  const hasActiveFilters =
-    filters.search || filters.department || filters.status ||
-    filters.risk_level || filters.verified !== null
+const RISK_KIND = { critical: 'crit', high: 'high', medium: 'med', low: 'low' }
+const STATUS_KIND = { active: 'active', paused: 'paused', planned: 'planned', deferred: 'deferred' }
 
+function Pill({ kind, children }) {
   return (
-    <div className="flex items-center gap-2 flex-wrap">
-      {/* Search */}
-      <div className="relative flex-1 min-w-48">
-        <Search
-          size={14}
-          className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400"
-        />
-        <input
-          type="text"
-          placeholder="Search rules…"
-          value={filters.search}
-          onChange={e => onUpdate({ search: e.target.value })}
-          className="
-            w-full pl-8 pr-3 py-1.5 text-sm rounded-lg
-            border border-slate-200 bg-white text-slate-900
-            placeholder:text-slate-400
-            focus:outline-none focus:ring-2 focus:ring-slate-300 focus:border-slate-400
-            transition-shadow duration-150
-          "
-          aria-label="Search rules"
-        />
+    <span className={`pill${kind ? ` ${kind}` : ''}`}>
+      {kind && <span className="dot" />}
+      {children}
+    </span>
+  )
+}
+
+function Dd({ label, value, onChange, options }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  useEffect(() => {
+    if (!open) return
+    const onDoc = e => { if (!ref.current?.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [open])
+  const displayValue = value || 'All'
+  return (
+    <div style={{ position: 'relative' }} ref={ref}>
+      <div className="select" onClick={() => setOpen(o => !o)}>
+        <span className="lbl">{label}:</span>
+        <span>{displayValue.charAt(0).toUpperCase() + displayValue.slice(1)}</span>
+        <span className="caret">{Ic.down}</span>
       </div>
-
-      {/* Department */}
-      <select
-        value={filters.department}
-        onChange={e => onUpdate({ department: e.target.value })}
-        className="select-field text-sm"
-        aria-label="Filter by department"
-      >
-        <option value="">All departments</option>
-        {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
-      </select>
-
-      {/* Status */}
-      <select
-        value={filters.status}
-        onChange={e => onUpdate({ status: e.target.value })}
-        className="select-field text-sm"
-        aria-label="Filter by status"
-      >
-        <option value="">All statuses</option>
-        {STATUSES.map(s => (
-          <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
-        ))}
-      </select>
-
-      {/* Risk level */}
-      <select
-        value={filters.risk_level}
-        onChange={e => onUpdate({ risk_level: e.target.value })}
-        className="select-field text-sm"
-        aria-label="Filter by risk level"
-      >
-        <option value="">All risk levels</option>
-        {RISK_LEVELS.map(r => (
-          <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>
-        ))}
-      </select>
-
-      {/* Verified toggle */}
-      <button
-        onClick={() => onUpdate({
-          verified: filters.verified === true ? false : filters.verified === false ? null : true,
-        })}
-        className={clsx(
-          'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm border transition-colors',
-          filters.verified === true  && 'bg-slate-100 border-slate-300 text-slate-700',
-          filters.verified === false && 'bg-slate-100 border-slate-300 text-slate-500',
-          filters.verified === null  && 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-        )}
-        aria-label="Toggle verified filter"
-      >
-        <CheckSquare size={13} />
-        {filters.verified === true  ? 'Verified' : filters.verified === false ? 'Unverified' : 'Verified?'}
-      </button>
-
-      {/* Clear */}
-      {hasActiveFilters && (
-        <button
-          onClick={onClear}
-          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-sm text-slate-500 hover:bg-slate-100 transition-colors"
-          aria-label="Clear all filters"
-        >
-          <X size={13} />
-          Clear
-        </button>
+      {open && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 4px)', right: 0,
+          background: 'var(--vellum)', border: '1px solid var(--rule)',
+          minWidth: 170, zIndex: 20, padding: 4,
+          borderRadius: 'var(--radius)',
+          boxShadow: '0 4px 16px rgba(0,0,0,0.06)',
+        }}>
+          {options.map(o => {
+            const label = o === '' ? 'All' : o.charAt(0).toUpperCase() + o.slice(1)
+            return (
+              <div key={o || 'all'} onClick={() => { onChange(o); setOpen(false) }}
+                style={{
+                  padding: '6px 10px', fontSize: 12.5, cursor: 'pointer',
+                  borderRadius: 4,
+                  background: o === value ? 'var(--paper-2)' : 'transparent',
+                  color: 'var(--ink-2)',
+                }}>
+                {label}
+              </div>
+            )
+          })}
+        </div>
       )}
-
-      {loading && <RefreshCw size={13} className="text-slate-400 animate-spin ml-1" />}
     </div>
   )
 }
-
-// ---------------------------------------------------------------------------
-// Sort header cell
-// ---------------------------------------------------------------------------
-
-function SortHeader({ column, currentSort, currentDir, onSort }) {
-  const active = currentSort === column.key
-  return (
-    <th
-      scope="col"
-      className={clsx(
-        'px-3 py-2.5 text-left',
-        column.width,
-        column.sortable && 'cursor-pointer select-none hover:bg-slate-100 transition-colors'
-      )}
-      onClick={column.sortable ? () => onSort(column.key) : undefined}
-      aria-sort={active ? (currentDir === 'asc' ? 'ascending' : 'descending') : undefined}
-    >
-      <div className="flex items-center gap-1 text-xs font-semibold text-slate-500 uppercase tracking-wide">
-        {column.label}
-        {column.sortable && (
-          active
-            ? currentDir === 'asc'
-              ? <ChevronUp size={11} className="text-slate-400" />
-              : <ChevronDown size={11} className="text-slate-400" />
-            : <ChevronsUpDown size={11} className="text-slate-300" />
-        )}
-      </div>
-    </th>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Department accent colors (used for pill border + drawer header strip)
-// ---------------------------------------------------------------------------
-
-function deptColor(_dept) {
-  return '#a8a29e'
-}
-
-// ---------------------------------------------------------------------------
-// Table row
-// ---------------------------------------------------------------------------
-
-function RuleRow({ rule, index, selected, onSelect }) {
-  return (
-    <tr
-      className={clsx(
-        'border-b border-slate-100 last:border-0 cursor-pointer transition-colors',
-        selected ? 'bg-slate-50' : 'bg-white hover:bg-slate-50'
-      )}
-      onClick={() => onSelect(rule.rule_id)}
-      aria-selected={selected}
-    >
-      {/* Rule ID */}
-      <td className="px-3 py-3 w-28">
-        <code
-          className="font-mono text-xs text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded-md"
-        >
-          {rule.rule_id}
-        </code>
-      </td>
-
-      {/* Title */}
-      <td className="px-3 py-3">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-slate-800 truncate max-w-xs">
-            {rule.title}
-          </span>
-          {!rule.verified && (
-            <span
-              className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-amber-400"
-              title="Not yet verified"
-              aria-label="Unverified"
-            />
-          )}
-        </div>
-      </td>
-
-      {/* Department */}
-      <td className="px-3 py-3 w-28">
-        <span className="text-sm text-slate-600">{rule.department ?? '—'}</span>
-      </td>
-
-      {/* Status */}
-      <td className="px-3 py-3 w-24">
-        <StatusBadge status={rule.status} size="sm" />
-      </td>
-
-      {/* Risk */}
-      <td className="px-3 py-3 w-24">
-        <RiskBadge level={rule.risk_level} size="sm" />
-      </td>
-
-      {/* Owner */}
-      <td className="px-3 py-3 w-32">
-        <span className="text-xs text-slate-500 truncate block max-w-[120px]">
-          {rule.owner ?? '—'}
-        </span>
-      </td>
-
-      {/* Last changed */}
-      <td className="px-3 py-3 w-28">
-        <span className="text-xs text-slate-400">{timeAgo(rule.last_changed)}</span>
-      </td>
-
-      {/* Verified */}
-      <td className="px-3 py-3 w-20">
-        {rule.verified ? (
-          <span className="text-slate-500" title="Verified" aria-label="Verified">
-            <CheckSquare size={14} />
-          </span>
-        ) : (
-          <span className="text-amber-400" title="Not verified" aria-label="Not verified">
-            <CheckSquare size={14} className="opacity-30" />
-          </span>
-        )}
-      </td>
-    </tr>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// RegistryPage
-// ---------------------------------------------------------------------------
 
 export default function RegistryPage() {
   const {
@@ -300,143 +106,190 @@ export default function RegistryPage() {
   } = useRegistryStore()
 
   const [displayRules, setDisplayRules] = useState([])
+  const [searchParams] = useSearchParams()
 
+  // Apply URL-derived filters once on mount (verified=false, status=active, risk_level=critical, etc)
   useEffect(() => {
-    fetchRules().catch(() => {
-      // On failure, show mock data
-      setDisplayRules(MOCK_RULES)
-    })
+    const upd = {}
+    const v = searchParams.get('verified')
+    if (v === 'false') upd.verified = false
+    if (v === 'true')  upd.verified = true
+    const status = searchParams.get('status')
+    if (status) upd.status = status
+    const risk = searchParams.get('risk_level')
+    if (risk) upd.risk_level = risk
+    if (Object.keys(upd).length) updateFilter(upd)
+    fetchRules().catch(() => setDisplayRules(MOCK_RULES))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Use store rules if available, else fall back to mock
   useEffect(() => {
-    if (rules.length > 0) {
-      setDisplayRules(rules)
-    } else if (!loading) {
-      setDisplayRules(MOCK_RULES)
-    }
+    if (rules.length > 0) setDisplayRules(rules)
+    else if (!loading)     setDisplayRules(MOCK_RULES)
   }, [rules, loading])
 
-  const handleSort = useCallback((col) => {
-    if (setSort) setSort(col)
-  }, [setSort])
-
   const total = totalCount || displayRules.length
+  const verifLabel = filters.verified === true ? 'Verified only'
+    : filters.verified === false ? 'Unverified only' : 'All'
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Top bar */}
-      <div className="flex-shrink-0 px-6 py-4 border-b border-slate-200 bg-white space-y-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-800">Rules Registry</h2>
-            <p className="text-xs text-slate-400 mt-0.5">
-              {total.toLocaleString()} rule{total !== 1 ? 's' : ''}
-              {filters.search && ` matching "${filters.search}"`}
-            </p>
+    <>
+      <header className="page-head">
+        <div>
+          <div className="folio">§ II · Registry</div>
+          <h1>Registry <em>of rules</em></h1>
+          <div className="lede">
+            The definitive list of every automation rule. Search, filter, and inspect —
+            every change is logged in the audit ledger.
           </div>
-          <button
-            onClick={() => fetchRules()}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors"
-          >
-            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-            Refresh
+        </div>
+        <div className="head-actions">
+          <button className="btn sm" onClick={() => fetchRules()} disabled={loading}>
+            {Ic.refresh} Refresh
+          </button>
+          <button className="btn sm primary">
+            {Ic.plus} New rule
           </button>
         </div>
+      </header>
 
-        <FilterBar
-          filters={filters}
-          onUpdate={updateFilter}
-          onClear={clearFilters}
-          loading={loading}
-        />
+      <div className="l-row mb16" style={{ flexWrap: 'wrap', gap: 10 }}>
+        <div className="input" style={{ flex: 1, minWidth: 280, maxWidth: 440 }}>
+          <span className="pre">{Ic.search}</span>
+          <input
+            placeholder="Search rules by id or title…"
+            value={filters.search ?? ''}
+            onChange={e => updateFilter({ search: e.target.value })}
+          />
+          {filters.search && (
+            <button onClick={() => updateFilter({ search: '' })} style={{ color: 'var(--ink-4)' }}>
+              {Ic.x}
+            </button>
+          )}
+        </div>
+        <div className="right l-row gap8" style={{ flexWrap: 'wrap' }}>
+          <Dd label="Dept"   value={filters.department ?? ''} onChange={v => updateFilter({ department: v })} options={['', ...DEPARTMENTS]} />
+          <Dd label="Status" value={filters.status ?? ''}     onChange={v => updateFilter({ status: v })}     options={['', ...STATUSES]} />
+          <Dd label="Risk"   value={filters.risk_level ?? ''} onChange={v => updateFilter({ risk_level: v })} options={['', ...RISK_LEVELS]} />
+          <div
+            className="select"
+            onClick={() => updateFilter({
+              verified: filters.verified === true ? false : filters.verified === false ? null : true,
+            })}
+            title="Click to cycle: all → verified → unverified"
+          >
+            <span style={{
+              display: 'inline-block', width: 12, height: 12,
+              border: '1.3px solid var(--ink-3)',
+              background: filters.verified === true ? 'var(--ink)'
+                : filters.verified === false ? 'var(--paper-3)' : 'transparent',
+              borderRadius: 3,
+            }} />
+            {verifLabel}
+          </div>
+          {(filters.search || filters.department || filters.status || filters.risk_level || filters.verified !== null) && (
+            <button className="btn sm ghost" onClick={clearFilters}>
+              {Ic.x} Clear
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Table */}
-      <div className="flex-1 overflow-auto scrollbar-thin">
-        <table className="w-full border-collapse min-w-[800px]">
-          <thead className="sticky top-0 bg-slate-50 border-b border-slate-200 z-10 shadow-[0_1px_0_rgba(0,0,0,0.05)]">
+      <div className="table-wrap">
+        <table className="l-table">
+          <thead>
             <tr>
-              {COLUMNS.map(col => (
-                <SortHeader
-                  key={col.key}
-                  column={col}
-                  currentSort={filters.sort_by}
-                  currentDir={filters.sort_dir}
-                  onSort={handleSort}
-                />
-              ))}
+              <th style={{ width: 120, cursor: 'pointer' }} onClick={() => setSort?.('rule_id')}>
+                Rule <span className="sort">{Ic.sort}</span>
+              </th>
+              <th onClick={() => setSort?.('title')} style={{ cursor: 'pointer' }}>
+                Title <span className="sort">{Ic.sort}</span>
+              </th>
+              <th style={{ width: 130 }}>Department</th>
+              <th style={{ width: 100 }}>Status</th>
+              <th style={{ width: 100 }}>Risk</th>
+              <th style={{ width: 170 }}>Owner</th>
+              <th style={{ width: 110 }}>Changed</th>
+              <th style={{ width: 90 }}>Verified</th>
             </tr>
           </thead>
-          <tbody className="bg-white divide-y divide-slate-50">
+          <tbody>
             {loading && displayRules.length === 0 ? (
               <tr>
-                <td colSpan={COLUMNS.length} className="text-center py-16 text-slate-400 text-sm">
-                  <RefreshCw size={20} className="animate-spin mx-auto mb-2" />
+                <td colSpan={8} style={{ textAlign: 'center', padding: 40, color: 'var(--ink-4)' }}>
                   Loading rules…
                 </td>
               </tr>
             ) : displayRules.length === 0 ? (
               <tr>
-                <td colSpan={COLUMNS.length} className="text-center py-20">
-                  <div className="flex flex-col items-center gap-3">
-                    <SlidersHorizontal size={20} className="text-slate-300" />
-                    <div className="space-y-1">
-                      <p className="text-sm font-medium text-slate-600">No rules match your filters</p>
-                      <p className="text-xs text-slate-400">Try broadening your search or clearing filters</p>
-                    </div>
-                    <button
-                      onClick={clearFilters}
-                      className="mt-1 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-600 border border-slate-200 bg-white hover:bg-slate-50 transition-colors"
-                    >
-                      Clear all filters
-                    </button>
-                  </div>
+                <td colSpan={8} style={{ textAlign: 'center', padding: 48, color: 'var(--ink-4)' }}>
+                  <div style={{ marginBottom: 8, color: 'var(--ink-3)' }}>No rules match your filters.</div>
+                  <button className="btn sm" onClick={clearFilters}>Clear filters</button>
                 </td>
               </tr>
-            ) : (
-              displayRules.map((rule, index) => (
-                <RuleRow
-                  key={rule.rule_id}
-                  rule={rule}
-                  index={index}
-                  selected={selectedRule?.rule_id === rule.rule_id}
-                  onSelect={selectRule}
-                />
-              ))
-            )}
+            ) : displayRules.map(r => {
+              const critUnverified = r.risk_level === 'critical' && !r.verified
+              const highUnverified = r.risk_level === 'high'     && !r.verified
+              const rowClass = selectedRule?.rule_id === r.rule_id ? 'selected'
+                : critUnverified ? 'focus-row'
+                : highUnverified ? 'warn-row'
+                : ''
+              return (
+                <tr key={r.rule_id} className={rowClass} onClick={() => selectRule(r.rule_id)}>
+                  <td className="id-cell">
+                    {r.rule_id}
+                    {!r.verified && <span className="flag">●</span>}
+                  </td>
+                  <td>{r.title}</td>
+                  <td className="dim">{r.department ?? '—'}</td>
+                  <td>
+                    <Pill kind={STATUS_KIND[r.status]}>
+                      {r.status ? r.status.charAt(0).toUpperCase() + r.status.slice(1) : '—'}
+                    </Pill>
+                  </td>
+                  <td>
+                    <Pill kind={RISK_KIND[r.risk_level]}>
+                      {r.risk_level ? r.risk_level.charAt(0).toUpperCase() + r.risk_level.slice(1) : '—'}
+                    </Pill>
+                  </td>
+                  <td className="dim mono" style={{ fontSize: 12 }}>{r.owner ?? '—'}</td>
+                  <td className="dim">{timeAgo(r.last_changed)}</td>
+                  <td>
+                    {r.verified
+                      ? <span style={{ color: 'var(--ok)', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}>{Ic.check} Signed</span>
+                      : <span className="dim" style={{ fontSize: 12 }}>pending</span>}
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
 
-      {/* Pagination */}
-      {total > filters.page_size && (
-        <div className="flex-shrink-0 flex items-center justify-between px-6 py-3 border-t border-slate-200 bg-white text-xs text-slate-500">
-          <span>
-            Showing {((filters.page - 1) * filters.page_size) + 1}–{Math.min(filters.page * filters.page_size, total)} of {total.toLocaleString()}
-          </span>
-          <div className="flex items-center gap-1">
+      {total > (filters.page_size ?? 50) && (
+        <div className="l-row mt16" style={{ justifyContent: 'space-between' }}>
+          <div className="dim" style={{ fontSize: 12 }}>
+            Showing {displayRules.length} of {total.toLocaleString()}
+          </div>
+          <div className="l-row gap8">
             <button
-              onClick={() => updateFilter({ page: filters.page - 1 })}
-              disabled={filters.page <= 1}
-              className="px-2 py-1 rounded border border-slate-200 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              Prev
-            </button>
-            <span className="px-2">Page {filters.page}</span>
+              className="btn sm"
+              onClick={() => updateFilter({ page: (filters.page ?? 1) - 1 })}
+              disabled={(filters.page ?? 1) <= 1}
+            >‹</button>
+            <span className="mono dim" style={{ fontSize: 12 }}>
+              {filters.page ?? 1} / {Math.max(1, Math.ceil(total / (filters.page_size ?? 50)))}
+            </span>
             <button
-              onClick={() => updateFilter({ page: filters.page + 1 })}
-              disabled={filters.page * filters.page_size >= total}
-              className="px-2 py-1 rounded border border-slate-200 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              Next
-            </button>
+              className="btn sm"
+              onClick={() => updateFilter({ page: (filters.page ?? 1) + 1 })}
+              disabled={(filters.page ?? 1) * (filters.page_size ?? 50) >= total}
+            >›</button>
           </div>
         </div>
       )}
 
-      {/* Rule detail drawer */}
       <RuleDrawer />
-    </div>
+    </>
   )
 }

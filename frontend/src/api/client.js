@@ -33,12 +33,17 @@ async function ensureTenantId() {
 // Bootstrap: auto-detect tenant on first load
 ensureTenantId()
 
-// Request interceptor — attach auth token and default tenant_id
+// Request interceptor — attach auth token, current-user header, and default tenant_id
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('runbook_token')
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
+    }
+    // Demo-mode auth: inject the selected user's id as X-User-Id
+    const currentUserId = localStorage.getItem('runbook_current_user_id')
+    if (currentUserId) {
+      config.headers['X-User-Id'] = currentUserId
     }
     // Skip tenant injection for the tenant discovery endpoint itself
     const url = config.url || ''
@@ -202,6 +207,166 @@ export function exportAudit(filters = {}) {
       responseType: 'blob',
     })
     .then(r => r.data)
+}
+
+// ---------------------------------------------------------------------------
+// Users API
+// ---------------------------------------------------------------------------
+
+export function getUsers(filters = {}) {
+  return api.get('/users', { params: filters }).then(r => r.data)
+}
+
+export function getCurrentUser() {
+  return api.get('/users/me').then(r => r.data)
+}
+
+export function createUser(body) {
+  return api.post('/users', body).then(r => r.data)
+}
+
+export function setUserRoles(userId, roles) {
+  return api.put(`/users/${userId}/roles`, { roles }).then(r => r.data)
+}
+
+// ---------------------------------------------------------------------------
+// Governance API
+// ---------------------------------------------------------------------------
+
+export function listPendingChanges(filters = {}) {
+  return api.get('/governance/pending-changes', { params: filters }).then(r => r.data)
+}
+
+export function decidePendingChange(id, decision, note) {
+  return api.post(`/governance/pending-changes/${id}/decide`, { decision, note }).then(r => r.data)
+}
+
+export function cancelPendingChange(id) {
+  return api.post(`/governance/pending-changes/${id}/cancel`).then(r => r.data)
+}
+
+export function listFreezeWindows(activeOnly = false) {
+  return api.get('/governance/freezes', { params: activeOnly ? { active_only: true } : {} }).then(r => r.data)
+}
+
+export function createFreezeWindow(body) {
+  return api.post('/governance/freezes', body).then(r => r.data)
+}
+
+export function deleteFreezeWindow(id) {
+  return api.delete(`/governance/freezes/${id}`).then(r => r.data)
+}
+
+// Attestations
+export function listAttestations(filters = {}) {
+  return api.get('/governance/attestations', { params: filters }).then(r => r.data)
+}
+export function issueAttestationCampaign(body) {
+  return api.post('/governance/attestations/campaign', body).then(r => r.data)
+}
+export function respondAttestation(id, body) {
+  return api.post(`/governance/attestations/${id}/respond`, body).then(r => r.data)
+}
+
+// ---------------------------------------------------------------------------
+// Compliance API (Tier 2)
+// ---------------------------------------------------------------------------
+
+// Evidence packs
+export function listEvidencePacks() {
+  return api.get('/compliance/evidence').then(r => r.data)
+}
+export function generateEvidencePack(body) {
+  return api.post('/compliance/evidence', body, { responseType: 'blob' })
+    .then((r) => ({
+      blob: r.data,
+      filename: (r.headers['content-disposition'] || '').match(/filename="([^"]+)"/)?.[1] || 'evidence.zip',
+      packId: r.headers['x-evidence-pack-id'],
+      sha256: r.headers['x-evidence-pack-sha256'],
+    }))
+}
+
+// SoD
+export function getSoDAlerts(filters = {}) {
+  return api.get('/compliance/sod-alerts', { params: filters }).then(r => r.data)
+}
+
+// Scan policies
+export function listScanPolicies() {
+  return api.get('/compliance/scan-policies').then(r => r.data)
+}
+export function createScanPolicy(body) {
+  return api.post('/compliance/scan-policies', body).then(r => r.data)
+}
+export function deleteScanPolicy(id) {
+  return api.delete(`/compliance/scan-policies/${id}`).then(r => r.data)
+}
+
+// Retention
+export function listRetentionPolicies() {
+  return api.get('/compliance/retention/policies').then(r => r.data)
+}
+export function upsertRetentionPolicy(body) {
+  return api.post('/compliance/retention/policies', body).then(r => r.data)
+}
+export function retentionDryRun() {
+  return api.get('/compliance/retention/dry-run').then(r => r.data)
+}
+export function retentionApply() {
+  return api.post('/compliance/retention/apply').then(r => r.data)
+}
+
+// Legal holds
+export function listLegalHolds(activeOnly = false) {
+  return api.get('/compliance/legal-holds', { params: activeOnly ? { active_only: true } : {} }).then(r => r.data)
+}
+export function createLegalHold(body) {
+  return api.post('/compliance/legal-holds', body).then(r => r.data)
+}
+export function releaseLegalHold(id) {
+  return api.post(`/compliance/legal-holds/${id}/release`).then(r => r.data)
+}
+
+// ---------------------------------------------------------------------------
+// Agent logs API
+// ---------------------------------------------------------------------------
+
+export function listAgentRuns(filters = {}) {
+  return api.get('/agent-logs', { params: filters }).then(r => r.data)
+}
+export function getAgentStats() {
+  return api.get('/agent-logs/stats').then(r => r.data)
+}
+export function getAgentRun(id) {
+  return api.get(`/agent-logs/${id}`).then(r => r.data)
+}
+
+// ---------------------------------------------------------------------------
+// File Access API
+// ---------------------------------------------------------------------------
+
+/**
+ * List file-access entries recorded by the extraction agent.
+ * @param {Object} filters - { extraction_job_id, source_type, action, sensitivity, search, date_from, date_to, limit, offset }
+ */
+export function getFileAccessLogs(filters = {}) {
+  return api.get('/file-access', { params: filters }).then(r => r.data)
+}
+
+/**
+ * Aggregate file-access stats for the data-access dashboard.
+ */
+export function getFileAccessStats() {
+  return api.get('/file-access/stats').then(r => r.data)
+}
+
+/**
+ * Flag or re-classify a file-access entry.
+ * @param {string} entryId
+ * @param {Object} body - { sensitivity: 'flagged' | 'ok' | 'unknown', reason?: string }
+ */
+export function flagFileAccess(entryId, body) {
+  return api.post(`/file-access/${entryId}/flag`, body).then(r => r.data)
 }
 
 // ---------------------------------------------------------------------------

@@ -137,6 +137,20 @@ async def create_tables() -> None:
 
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # SQLite-only: lightweight column additions. create_all only creates
+        # missing tables, not missing columns — so any model that gained a
+        # column after first run needs a one-shot ALTER. List tuples of
+        # (table, column_name, column_ddl). Safe to re-run: we detect and skip.
+        if async_engine.url.drivername.startswith("sqlite"):
+            from sqlalchemy import text
+            adds = [
+                ("file_access_logs", "pii_tags", "TEXT"),
+            ]
+            for table, col, ddl in adds:
+                info = (await conn.execute(text(f"PRAGMA table_info({table})"))).all()
+                existing = {row[1] for row in info}
+                if col not in existing:
+                    await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}"))
 
 
 def create_tables_sync() -> None:

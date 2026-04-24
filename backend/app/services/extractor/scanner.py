@@ -12,12 +12,13 @@ expensive to miss a real rule.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -123,10 +124,26 @@ class CodebaseScanner:
     automation rules, and extract relevant code chunks for LLM analysis.
     """
 
-    def __init__(self, repo_path: str, branch: str = "main") -> None:
+    def __init__(
+        self,
+        repo_path: str,
+        branch: str = "main",
+        access_logger: Optional[Any] = None,
+        scan_policy: Optional[Any] = None,
+        pii_scan: bool = True,
+    ) -> None:
         self.repo_path = Path(repo_path).resolve()
         self.branch = branch
         self._chunks: List[CodeChunk] = []
+        # Optional AccessLogger — records every file this scanner touches.
+        # Duck-typed to avoid a hard dependency so scanner remains usable
+        # from tests and scripts without a DB session.
+        self._access_logger = access_logger
+        # Optional ScanPolicy — if present, denied paths are never read and
+        # are logged as 'policy_denied'. Duck-typed: expects .mode,
+        # .allow_patterns, .deny_patterns, .name.
+        self._scan_policy = scan_policy
+        self._pii_scan = pii_scan
 
     # ------------------------------------------------------------------
     # Public interface
@@ -171,19 +188,98 @@ class CodebaseScanner:
 
             for filename in files:
                 filepath = Path(root) / filename
-                if filepath.suffix.lower() not in _SUPPORTED_EXTENSIONS:
+                rel = self._rel(filepath)
+                ext = filepath.suffix.lower()
+
+                # Scan-policy gate — run BEFORE any read to ensure denied
+                # paths don't hit the LLM or leak content into logs.
+                if self._scan_policy is not None:
+                    from app.services.governance.scan_policy import evaluate
+                    allowed, matched, reason = evaluate(
+                        rel,
+                        mode=self._scan_policy.mode,
+                        allow_patterns=self._scan_policy.allow_patterns or [],
+                        deny_patterns=self._scan_policy.deny_patterns or [],
+                    )
+                    if not allowed:
+                        self._log_access(
+                            rel,
+                            action="skipped_error",
+                            reason=f"scan policy '{self._scan_policy.name}' denied: {reason}",
+                            sensitivity="flagged",
+                        )
+                        continue
+
+                if ext not in _SUPPORTED_EXTENSIONS:
+                    self._log_access(rel, action="skipped_ext", reason=f"unsupported extension {ext}")
                     continue
-                if filepath.stat().st_size > _MAX_FILE_SIZE_BYTES:
+                try:
+                    size = filepath.stat().st_size
+                except OSError as exc:
+                    self._log_access(rel, action="skipped_error", reason=f"stat failed: {exc}")
+                    continue
+                if size > _MAX_FILE_SIZE_BYTES:
                     logger.debug("Skipping large file: %s", filepath)
+                    self._log_access(rel, action="skipped_size", size_bytes=size, reason=f">{_MAX_FILE_SIZE_BYTES} bytes")
                     continue
                 try:
                     text = filepath.read_text(encoding="utf-8", errors="replace")
-                except OSError:
+                except OSError as exc:
+                    self._log_access(rel, action="skipped_error", size_bytes=size, reason=f"read failed: {exc}")
                     continue
-                if self._has_any_pattern(text):
+                matched = self._has_any_pattern(text)
+
+                # PII content classification
+                pii_reason = None
+                pii_sensitivity = None
+                pii_tags: list = []
+                if self._pii_scan:
+                    try:
+                        from app.services.file_access.pii_classifier import (
+                            classify_content, summary_reason, upgrade_sensitivity,
+                        )
+                        findings = classify_content(text)
+                        if findings:
+                            pii_reason = summary_reason(findings)
+                            pii_sensitivity = upgrade_sensitivity(None, findings)
+                            pii_tags = [
+                                {"tag": f.tag, "label": f.label, "count": f.count}
+                                for f in findings
+                            ]
+                    except Exception as exc:
+                        logger.debug("pii_classifier failed for %s: %s", rel, exc)
+
+                base_reason = ("pattern match" if matched else "scanned — no patterns found")
+                combined_reason = f"{base_reason}. {pii_reason}" if pii_reason else base_reason
+
+                self._log_access(
+                    rel,
+                    action="read",
+                    size_bytes=size,
+                    content_hash=hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest(),
+                    language=_extension_to_language(ext),
+                    reason=combined_reason,
+                    sensitivity=pii_sensitivity,
+                    pii_tags=pii_tags,
+                )
+                if matched:
                     candidates.append(filepath)
 
         return candidates
+
+    def _rel(self, filepath: Path) -> str:
+        try:
+            return str(filepath.relative_to(self.repo_path))
+        except ValueError:
+            return str(filepath)
+
+    def _log_access(self, path: str, action: str, **kwargs) -> None:
+        if self._access_logger is None:
+            return
+        try:
+            self._access_logger.record(path=path, action=action, **kwargs)
+        except Exception as exc:
+            logger.warning("AccessLogger.record failed for %s: %s", path, exc)
 
     def _has_any_pattern(self, text: str) -> bool:
         for _name, pattern in _PATTERNS:

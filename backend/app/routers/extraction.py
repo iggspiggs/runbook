@@ -17,10 +17,13 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, s
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db import get_db
+from app.db import AsyncSessionLocal, get_db
 from app.services.registry.rule_service import RuleService
 from app.services.extractor.scanner import CodebaseScanner
 from app.services.extractor.analyzer import RuleAnalyzer
+from app.services.file_access import AccessLogger
+from app.services.agent_logger import AgentLogger
+from app.models.file_access_log import FileSourceType
 from app.config import settings
 
 import anthropic
@@ -99,14 +102,58 @@ async def _run_extraction(job_id: str, req: ExtractionRequest) -> None:
         if not repo_path:
             raise ValueError("Either repo_url or local_path must be provided.")
 
-        scanner = CodebaseScanner(repo_path=repo_path, branch=req.branch)
+        access_logger = AccessLogger(
+            tenant_id=req.tenant_id,
+            extraction_job_id=job_id,
+            source_type=(FileSourceType.GIT.value if req.repo_url else FileSourceType.LOCAL.value),
+            source_name=req.repo_url or repo_path,
+            agent="extractor",
+        )
+
+        # Load the active scan policy for this tenant (if any) so the scanner
+        # can deny disallowed paths before reading.
+        import uuid as _uuid
+        from app.services.governance.scan_policy import get_active_policy
+        policy = None
+        async with AsyncSessionLocal() as session:
+            try:
+                policy = await get_active_policy(session, _uuid.UUID(req.tenant_id))
+            except Exception:
+                policy = None
+
+        scanner = CodebaseScanner(
+            repo_path=repo_path,
+            branch=req.branch,
+            access_logger=access_logger,
+            scan_policy=policy,
+        )
         chunks = scanner.scan()
         job["chunks_found"] = len(chunks)
+        job["files_touched"] = access_logger.pending_count
         job["status"] = "analyzing"
+
+        async with AsyncSessionLocal() as session:
+            try:
+                await access_logger.flush(session)
+            except Exception as exc:
+                # Logging failure must not kill the extraction
+                job["access_log_error"] = str(exc)
 
         client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
         analyzer = RuleAnalyzer(anthropic_client=client)
-        extracted_rules = await analyzer.analyze_batch(chunks)
+
+        agent_logger = AgentLogger(
+            tenant_id=req.tenant_id,
+            agent_name="extractor",
+            agent_version="v1",
+            job_id=job_id,
+        )
+        extracted_rules = await analyzer.analyze_batch(chunks, agent_logger=agent_logger)
+        async with AsyncSessionLocal() as session:
+            try:
+                await agent_logger.flush(session)
+            except Exception as exc:
+                job["agent_log_error"] = str(exc)
 
         job["status"] = "complete"
         # Use to_dict() so editable_fields items are serialised as plain dicts

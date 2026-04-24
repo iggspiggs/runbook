@@ -1,200 +1,106 @@
-import React, { useState, useEffect, useCallback } from 'react'
-import {
-  Download, Search, RefreshCw, Filter,
-  Edit2, CheckCircle2, Plus, Trash2, Clock,
-  ChevronLeft, ChevronRight,
-} from 'lucide-react'
-import clsx from 'clsx'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { getAuditLog, exportAudit } from '../../api/client.js'
-
-// ---------------------------------------------------------------------------
-// Mock data
-// ---------------------------------------------------------------------------
 
 const MOCK_ENTRIES = Array.from({ length: 40 }, (_, i) => {
   const actions   = ['edit', 'verify', 'add', 'delete', 'import']
   const operators = ['alice@co.com', 'bob@co.com', 'carol@co.com', 'system', 'dave@co.com']
-  const rule_ids  = ['FIN-001', 'FIN-002', 'OPS-007', 'IT-031', 'HR-012', 'SALES-003', 'MKT-002']
+  const rule_ids  = ['FIN-001', 'FIN-002', 'OPS-007', 'IT-031', 'HR-012', 'SLS-003', 'MKT-002']
   const descriptions = [
-    'Updated threshold from 1000 to 5000',
-    'Marked as verified by operator',
-    'Ingested via extraction job #44',
-    'Changed retry_limit from 3 to 5',
-    'Disabled budget_cap flag',
-    'Updated notify_list to include security@co.com',
-    'Changed approval_chain to manager → director',
-    'Updated cron schedule to 0 9 * * 1-5',
+    'updated threshold from 1000 to 5000',
+    'marked as verified',
+    'ingested via extraction job #44',
+    'changed retry_limit from 3 to 5',
+    'disabled budget_cap flag',
+    'updated notify_list to include security@co.com',
+    'changed approval_chain to manager → director',
+    'updated cron schedule to 0 9 * * 1-5',
   ]
-
   return {
-    id:          i + 1,
-    timestamp:   new Date(Date.now() - i * 2_400_000).toISOString(),
-    action:      actions[i % actions.length],
-    operator:    operators[i % operators.length],
-    rule_id:     rule_ids[i % rule_ids.length],
+    id: i + 1,
+    timestamp: new Date(Date.now() - i * 2_400_000).toISOString(),
+    action: actions[i % actions.length],
+    operator: operators[i % operators.length],
+    rule_id: rule_ids[i % rule_ids.length],
     description: descriptions[i % descriptions.length],
-    field:       i % 2 === 0 ? 'threshold' : undefined,
-    old_value:   i % 2 === 0 ? '1000' : undefined,
-    new_value:   i % 2 === 0 ? '5000' : undefined,
+    field: i % 3 === 0 ? 'threshold' : undefined,
+    old_value: i % 3 === 0 ? '1000' : undefined,
+    new_value: i % 3 === 0 ? '5000' : undefined,
   }
 })
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function formatRelative(isoString) {
-  const now  = Date.now()
-  const then = new Date(isoString).getTime()
-  const diffMs = now - then
-  const diffMins  = Math.floor(diffMs / 60_000)
-  const diffHours = Math.floor(diffMs / 3_600_000)
-  const diffDays  = Math.floor(diffMs / 86_400_000)
-
-  if (diffMins < 1)   return 'just now'
-  if (diffMins < 60)  return `${diffMins}m ago`
-  if (diffHours < 24) return `${diffHours}h ago`
-  if (diffDays < 7)   return `${diffDays}d ago`
-
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short', day: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  }).format(new Date(isoString))
+const Ic = {
+  search:  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5l3 3"/></svg>,
+  down:    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 4.5l3 3 3-3"/></svg>,
+  refresh: <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M13 7a5 5 0 1 0-1.5 3.5M13 3v3h-3"/></svg>,
 }
 
-const ACTION_CONFIG = {
-  edit:   { Icon: Edit2,        color: 'bg-slate-100 text-slate-600 border-slate-200', label: 'Edit' },
-  verify: { Icon: CheckCircle2, color: 'bg-slate-100 text-slate-600 border-slate-200', label: 'Verify' },
-  add:    { Icon: Plus,         color: 'bg-slate-100 text-slate-600 border-slate-200', label: 'Add' },
-  delete: { Icon: Trash2,       color: 'bg-red-50 text-red-600 border-red-200',        label: 'Delete' },
-  import: { Icon: Download,     color: 'bg-slate-100 text-slate-600 border-slate-200', label: 'Import' },
+const ACTIONS = ['All', 'edit', 'verify', 'add', 'delete', 'import']
+
+function formatWhen(iso) {
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(new Date(iso))
+  } catch { return iso }
 }
 
-// ---------------------------------------------------------------------------
-// Filter bar
-// ---------------------------------------------------------------------------
+function Pill({ kind, children }) {
+  return <span className={`pill${kind ? ` ${kind}` : ''}`}>{kind && <span className="dot" />}{children}</span>
+}
 
-function AuditFilterBar({ filters, onChange }) {
+function Dd({ label, value, onChange, options }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  useEffect(() => {
+    if (!open) return
+    const onDoc = e => { if (!ref.current?.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [open])
+  const displayValue = value === '' ? 'All' : value.charAt(0).toUpperCase() + value.slice(1)
   return (
-    <div className="flex items-center gap-2 flex-wrap">
-      <div className="relative flex-1 min-w-48">
-        <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-        <input
-          type="text"
-          placeholder="Search rule ID or operator…"
-          value={filters.search ?? ''}
-          onChange={e => onChange({ search: e.target.value })}
-          className="
-            w-full pl-8 pr-3 py-1.5 text-sm rounded-lg border border-slate-200 bg-white
-            focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-slate-400
-          "
-        />
+    <div style={{ position: 'relative' }} ref={ref}>
+      <div className="select" onClick={() => setOpen(o => !o)}>
+        <span className="lbl">{label}:</span>
+        <span>{displayValue}</span>
+        <span className="caret">{Ic.down}</span>
       </div>
-
-      <select
-        value={filters.action ?? ''}
-        onChange={e => onChange({ action: e.target.value })}
-        className="select-field text-sm py-1.5 px-3 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-slate-400 text-slate-700"
-      >
-        <option value="">All actions</option>
-        {Object.entries(ACTION_CONFIG).map(([k, v]) => (
-          <option key={k} value={k}>{v.label}</option>
-        ))}
-      </select>
-
-      <select
-        value={filters.operator ?? ''}
-        onChange={e => onChange({ operator: e.target.value })}
-        className="select-field text-sm py-1.5 px-3 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-slate-400 text-slate-700"
-      >
-        <option value="">All operators</option>
-        {['alice@co.com', 'bob@co.com', 'carol@co.com', 'dave@co.com', 'system'].map(op => (
-          <option key={op} value={op}>{op}</option>
-        ))}
-      </select>
+      {open && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 4px)', right: 0,
+          background: 'var(--vellum)', border: '1px solid var(--rule)',
+          minWidth: 160, zIndex: 20, padding: 4, borderRadius: 'var(--radius)',
+          boxShadow: '0 4px 16px rgba(0,0,0,0.06)',
+        }}>
+          {options.map(o => {
+            const optionValue = o === 'All' ? '' : o
+            const displayLabel = o === 'All' ? 'All' : o.charAt(0).toUpperCase() + o.slice(1)
+            return (
+              <div key={o} onClick={() => { onChange(optionValue); setOpen(false) }}
+                style={{
+                  padding: '6px 10px', fontSize: 12.5, cursor: 'pointer',
+                  borderRadius: 4,
+                  background: optionValue === value ? 'var(--paper-2)' : 'transparent',
+                  color: 'var(--ink-2)',
+                }}>
+                {displayLabel}
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
 
-// ---------------------------------------------------------------------------
-// Audit entry row
-// ---------------------------------------------------------------------------
-
-function AuditRow({ entry }) {
-  const cfg = ACTION_CONFIG[entry.action] ?? ACTION_CONFIG.edit
-  const { Icon } = cfg
-
-  return (
-    <tr className="border-b border-slate-100 bg-white hover:bg-slate-50 transition-colors">
-      {/* Timestamp */}
-      <td className="px-4 py-3 w-32">
-        <div className="flex flex-col gap-0.5">
-          <span className="text-xs font-medium text-slate-700 whitespace-nowrap tabular-nums">
-            {formatRelative(entry.timestamp)}
-          </span>
-          <span className="text-[10px] text-slate-400 whitespace-nowrap">
-            {new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(new Date(entry.timestamp))}
-          </span>
-        </div>
-      </td>
-
-      {/* Action */}
-      <td className="px-4 py-3 w-28">
-        <span className={clsx(
-          'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-semibold whitespace-nowrap',
-          cfg.color
-        )}>
-          <Icon size={11} />
-          {cfg.label}
-        </span>
-      </td>
-
-      {/* Rule ID */}
-      <td className="px-4 py-3 w-28">
-        <code className="font-mono text-xs text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
-          {entry.rule_id}
-        </code>
-      </td>
-
-      {/* Description + diff */}
-      <td className="px-4 py-3">
-        <p className="text-sm text-slate-700">{entry.description}</p>
-        {entry.field && (
-          <div className="flex items-center gap-1.5 mt-1.5 font-mono text-xs">
-            <span className="text-slate-400">{entry.field}:</span>
-            <span className="text-slate-400 line-through">
-              {entry.old_value}
-            </span>
-            <span className="text-slate-400">→</span>
-            <span className="text-slate-800 font-medium">
-              {entry.new_value}
-            </span>
-          </div>
-        )}
-      </td>
-
-      {/* Operator */}
-      <td className="px-4 py-3 w-36">
-        <span className="text-xs text-slate-500 truncate block">
-          {entry.operator === 'system' ? (
-            <span className="italic text-slate-400">system</span>
-          ) : entry.operator}
-        </span>
-      </td>
-    </tr>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// AuditPage
-// ---------------------------------------------------------------------------
+const ACTION_KIND = { verify: 'active', add: 'planned', delete: 'crit', edit: '', import: 'planned' }
 
 export default function AuditPage() {
-  const [entries, setEntries]     = useState(MOCK_ENTRIES)
-  const [loading, setLoading]     = useState(false)
+  const [entries, setEntries] = useState(MOCK_ENTRIES)
+  const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
-  const [filters, setFilters]     = useState({ search: '', action: '', operator: '' })
-  const [page, setPage]           = useState(1)
+  const [filters, setFilters] = useState({ search: '', action: '' })
+  const [page, setPage] = useState(1)
   const PAGE_SIZE = 20
 
   const load = useCallback(async () => {
@@ -211,11 +117,6 @@ export default function AuditPage() {
 
   useEffect(() => { load() }, [load])
 
-  const handleFilterChange = (patch) => {
-    setFilters(prev => ({ ...prev, ...patch }))
-    setPage(1)
-  }
-
   const handleExport = async () => {
     setExporting(true)
     try {
@@ -226,132 +127,119 @@ export default function AuditPage() {
       a.download = `runbook-audit-${new Date().toISOString().slice(0, 10)}.csv`
       a.click()
       URL.revokeObjectURL(url)
-    } catch {
-      alert('Export failed — try again.')
-    } finally {
-      setExporting(false)
-    }
+    } catch { alert('Export failed — try again.') }
+    finally { setExporting(false) }
   }
 
-  // Client-side filter on mock data
   const filtered = entries.filter(e => {
     const q = (filters.search ?? '').toLowerCase()
     const matchSearch = !q ||
-      e.rule_id.toLowerCase().includes(q) ||
-      e.operator.toLowerCase().includes(q) ||
-      e.description.toLowerCase().includes(q)
-    const matchAction   = !filters.action   || e.action === filters.action
-    const matchOperator = !filters.operator || e.operator === filters.operator
-    return matchSearch && matchAction && matchOperator
+      e.rule_id?.toLowerCase().includes(q) ||
+      e.operator?.toLowerCase().includes(q) ||
+      e.description?.toLowerCase().includes(q)
+    const matchAction = !filters.action || e.action === filters.action
+    return matchSearch && matchAction
   })
-
   const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
-  const totalPages = Math.ceil(filtered.length / PAGE_SIZE)
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex-shrink-0 px-6 py-4 border-b border-slate-200 bg-white space-y-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-800">Audit Log</h2>
-            <p className="text-xs text-slate-400 mt-0.5">
-              {filtered.length.toLocaleString()} entries
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={load}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors"
-            >
-              <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-              Refresh
-            </button>
-            <button
-              onClick={handleExport}
-              disabled={exporting}
-              className="
-                flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg
-                bg-white border border-slate-200 text-slate-700 hover:bg-slate-50
-                disabled:opacity-50 transition-colors
-              "
-            >
-              <Download size={14} />
-              {exporting ? 'Exporting…' : 'Export CSV'}
-            </button>
+    <>
+      <header className="page-head">
+        <div>
+          <div className="folio">§ VII · Audit Log</div>
+          <h1>Audit <em>log</em></h1>
+          <div className="lede">
+            Every edit, enrollment, and verification — in order, retained permanently.
           </div>
         </div>
-        <AuditFilterBar filters={filters} onChange={handleFilterChange} />
+        <div className="head-actions">
+          <button className="btn sm" onClick={load} disabled={loading}>
+            {Ic.refresh} Refresh
+          </button>
+          <button className="btn sm" onClick={handleExport} disabled={exporting}>
+            {exporting ? 'Exporting…' : 'Export CSV'}
+          </button>
+        </div>
+      </header>
+
+      <div className="l-row mb16" style={{ gap: 10, flexWrap: 'wrap' }}>
+        <div className="input" style={{ flex: 1, minWidth: 280, maxWidth: 440 }}>
+          <span className="pre">{Ic.search}</span>
+          <input
+            placeholder="Search by rule id or operator…"
+            value={filters.search}
+            onChange={e => { setFilters(f => ({ ...f, search: e.target.value })); setPage(1) }}
+          />
+        </div>
+        <div className="right l-row gap8">
+          <Dd
+            label="Action"
+            value={filters.action}
+            onChange={v => { setFilters(f => ({ ...f, action: v })); setPage(1) }}
+            options={ACTIONS}
+          />
+        </div>
       </div>
 
-      {/* Table */}
-      <div className="flex-1 overflow-auto scrollbar-thin">
-        <table className="w-full border-collapse min-w-[800px]">
-          <thead className="sticky top-0 bg-slate-50 border-b border-slate-200 z-10">
+      <div className="table-wrap">
+        <table className="l-table">
+          <thead>
             <tr>
-              {[
-                { label: 'When',     w: 'w-32' },
-                { label: 'Action',   w: 'w-28' },
-                { label: 'Rule ID',  w: 'w-28' },
-                { label: 'Change',   w: 'flex-1' },
-                { label: 'Operator', w: 'w-36' },
-              ].map(col => (
-                <th key={col.label} scope="col" className={clsx('px-4 py-2.5 text-left', col.w)}>
-                  <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
-                    {col.label}
-                  </span>
-                </th>
-              ))}
+              <th style={{ width: 150 }}>When</th>
+              <th style={{ width: 100 }}>Action</th>
+              <th style={{ width: 130 }}>Rule</th>
+              <th>Change</th>
+              <th style={{ width: 180 }}>Operator</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr>
-                <td colSpan={5} className="text-center py-16 text-slate-400 text-sm bg-white">
-                  <RefreshCw size={20} className="animate-spin mx-auto mb-2" />
-                  Loading audit log…
-                </td>
-              </tr>
+              <tr><td colSpan={5} style={{ textAlign: 'center', padding: 40, color: 'var(--ink-4)' }}>Loading audit log…</td></tr>
             ) : paginated.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="text-center py-16 text-slate-400 text-sm bg-white">
-                  No entries match your filters.
+              <tr><td colSpan={5} style={{ textAlign: 'center', padding: 40, color: 'var(--ink-4)' }}>No entries match your filters.</td></tr>
+            ) : paginated.map(e => (
+              <tr key={e.id} className={e.action === 'verify' ? 'focus-row' : ''}>
+                <td className="mono dim" style={{ fontSize: 12 }}>{formatWhen(e.timestamp)}</td>
+                <td>
+                  <Pill kind={ACTION_KIND[e.action]}>
+                    {e.action ? e.action.charAt(0).toUpperCase() + e.action.slice(1) : '—'}
+                  </Pill>
+                </td>
+                <td className="id-cell">{e.rule_id}</td>
+                <td>
+                  <span className="dim">{e.description}</span>
+                  {e.field && (
+                    <div className="mono" style={{ fontSize: 11.5, marginTop: 4, color: 'var(--ink-4)' }}>
+                      {e.field}: <span style={{ textDecoration: 'line-through' }}>{e.old_value}</span>
+                      {' → '}
+                      <span style={{ color: 'var(--ink), fontWeight: 500' }}>{e.new_value}</span>
+                    </div>
+                  )}
+                </td>
+                <td className="mono dim" style={{ fontSize: 12 }}>
+                  {e.operator === 'system'
+                    ? <em style={{ fontStyle: 'italic', color: 'var(--ink-4)' }}>system</em>
+                    : e.operator}
                 </td>
               </tr>
-            ) : (
-              paginated.map((entry) => (
-                <AuditRow key={entry.id} entry={entry} />
-              ))
-            )}
+            ))}
           </tbody>
         </table>
       </div>
 
-      {/* Pagination */}
-      <div className="flex-shrink-0 flex items-center justify-between px-6 py-3 border-t border-slate-200 bg-white text-xs text-slate-500">
-        <span>
-          Showing {((page - 1) * PAGE_SIZE) + 1}–{Math.min(page * PAGE_SIZE, filtered.length)} of {filtered.length}
-        </span>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setPage(p => Math.max(1, p - 1))}
-            disabled={page <= 1}
-            className="p-1.5 rounded border border-slate-200 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            aria-label="Previous page"
-          >
-            <ChevronLeft size={12} />
-          </button>
-          <span className="px-2">Page {page} of {totalPages}</span>
-          <button
-            onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-            disabled={page >= totalPages}
-            className="p-1.5 rounded border border-slate-200 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            aria-label="Next page"
-          >
-            <ChevronRight size={12} />
-          </button>
+      {filtered.length > PAGE_SIZE && (
+        <div className="l-row mt16" style={{ justifyContent: 'space-between' }}>
+          <div className="dim" style={{ fontSize: 12 }}>
+            Showing {((page - 1) * PAGE_SIZE) + 1}–{Math.min(page * PAGE_SIZE, filtered.length)} of {filtered.length}
+          </div>
+          <div className="l-row gap8">
+            <button className="btn sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}>‹</button>
+            <span className="mono dim" style={{ fontSize: 12 }}>{page} / {totalPages}</span>
+            <button className="btn sm" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages}>›</button>
+          </div>
         </div>
-      </div>
-    </div>
+      )}
+    </>
   )
 }

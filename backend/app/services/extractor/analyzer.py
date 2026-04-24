@@ -181,10 +181,18 @@ class RuleAnalyzer:
         results = self._parse_response(response_text, [chunk])
         return results[0] if results else None
 
-    async def analyze_batch(self, chunks: List[CodeChunk]) -> List[ExtractedRule]:
+    async def analyze_batch(
+        self,
+        chunks: List[CodeChunk],
+        agent_logger: Optional[Any] = None,
+    ) -> List[ExtractedRule]:
         """
         Process all chunks in parallel batches, then deduplicate and
         resolve cross-references.
+
+        If an ``agent_logger`` is provided, one AgentRun record is emitted per
+        batch with model name, token counts, and duration — surfaced on the
+        /agent-logs page so operators can see exactly what the LLM did.
         """
         if not chunks:
             return []
@@ -193,14 +201,31 @@ class RuleAnalyzer:
         batches = [chunks[i : i + _BATCH_SIZE] for i in range(0, len(chunks), _BATCH_SIZE)]
         semaphore = asyncio.Semaphore(_MAX_CONCURRENCY)
 
-        async def process_batch(batch: List[CodeChunk]) -> List[ExtractedRule]:
+        async def process_batch(idx: int, batch: List[CodeChunk]) -> List[ExtractedRule]:
             async with semaphore:
                 message = self._build_user_message(batch)
-                response_text = await self._call_claude(message)
+                if agent_logger is None:
+                    response_text = await self._call_claude(message)
+                else:
+                    label = (
+                        batch[0].file_path
+                        if len(batch) == 1
+                        else f"{batch[0].file_path} (+{len(batch)-1} more)"
+                    )
+                    async with agent_logger.run(
+                        step_index=idx,
+                        step_label=label,
+                        input_summary=message,
+                    ) as rec:
+                        response_obj = await self._call_claude_raw(message)
+                        rec.set_anthropic_response(response_obj)
+                        response_text = (
+                            response_obj.content[0].text if response_obj.content else ""
+                        )
                 return self._parse_response(response_text, batch)
 
         task_results = await asyncio.gather(
-            *[process_batch(b) for b in batches],
+            *[process_batch(i, b) for i, b in enumerate(batches)],
             return_exceptions=True,
         )
 
@@ -221,21 +246,23 @@ class RuleAnalyzer:
     # ------------------------------------------------------------------
 
     async def _call_claude(self, user_message: str) -> str:
+        resp = await self._call_claude_raw(user_message)
+        return resp.content[0].text if resp.content else ""
+
+    async def _call_claude_raw(self, user_message: str):
         """
-        Thin async wrapper around the synchronous Anthropic SDK.
-        Runs the blocking call in a thread pool executor so it does
-        not block the FastAPI event loop.
+        Returns the raw anthropic Message object so callers (like the agent
+        logger) can read model, usage, and stop_reason.
         """
         loop = asyncio.get_event_loop()
 
-        def _sync_call() -> str:
-            response = self._client.messages.create(
+        def _sync_call():
+            return self._client.messages.create(
                 model=_MODEL,
                 max_tokens=_MAX_TOKENS,
                 system=_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_message}],
             )
-            return response.content[0].text
 
         return await loop.run_in_executor(None, _sync_call)
 

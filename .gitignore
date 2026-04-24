@@ -20,6 +20,12 @@ backend/.env
 *.db
 *.sqlite3
 
+# Dev server logs
+backend/uvicorn.log
+backend/uvicorn.err.log
+frontend/vite.log
+frontend/vite.err.log
+
 # IDE
 .vscode/
 .idea/
