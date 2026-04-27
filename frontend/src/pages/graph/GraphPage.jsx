@@ -385,10 +385,17 @@ function PipelineView({ rules, onSelectRule, selectedRuleId }) {
     return [...deptRules].sort((a, b) => (inDegree[a.rule_id] || 0) - (inDegree[b.rule_id] || 0))
   }, [])
 
+  const RISK_PILL = { critical: 'crit', high: 'high', medium: 'med', low: 'low' }
+
   return (
-    <div className="flex h-full overflow-x-auto overflow-y-hidden">
+    <div style={{
+      display: 'flex',
+      height: '100%',
+      overflowX: 'auto',
+      overflowY: 'hidden',
+      background: 'var(--paper)',
+    }}>
       {departments.map((dept, deptIdx) => {
-        const dc = deptColor(dept)
         const deptRules = sortedRules(grouped[dept] || [])
         const isExpanded = expandedDepts.has(dept)
         const activeCount = deptRules.filter(r => r.status === 'active').length
@@ -400,123 +407,158 @@ function PipelineView({ rules, onSelectRule, selectedRuleId }) {
         return (
           <div
             key={dept}
-            className="flex flex-col flex-shrink-0"
             style={{
+              display: 'flex',
+              flexDirection: 'column',
+              flexShrink: 0,
               width: 300,
               minWidth: 300,
-              borderRight: deptIdx < departments.length - 1 ? '1px solid #e2e8f0' : 'none',
+              borderRight: deptIdx < departments.length - 1 ? '1px solid var(--rule-hair)' : 'none',
+              background: 'var(--vellum)',
             }}
           >
-            {/* Phase header */}
+            {/* Phase header — editorial style, small folio-caps */}
             <div
-              className="flex-shrink-0 px-3 py-3 cursor-pointer select-none hover:brightness-95 transition-all"
-              style={{
-                borderBottom: `3px solid ${dc.tag}`,
-                backgroundColor: dc.bg,
-              }}
               onClick={() => toggleDept(dept)}
+              style={{
+                flexShrink: 0,
+                padding: '14px 16px 12px',
+                cursor: 'pointer',
+                userSelect: 'none',
+                borderBottom: '1px solid var(--rule)',
+                background: 'var(--paper-2)',
+                transition: 'background 120ms',
+              }}
             >
-              <div className="flex items-center justify-between">
-                <h3
-                  className="font-bold text-xs uppercase tracking-wider"
-                  style={{ color: dc.text }}
-                >
-                  {dept}
-                </h3>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
-                    style={{ backgroundColor: dc.tag + '20', color: dc.text }}
-                  >
-                    {deptRules.length}
-                  </span>
-                  {isExpanded
-                    ? <ChevronDown size={14} style={{ color: dc.text }} />
-                    : <ChevronRight size={14} style={{ color: dc.text }} />
-                  }
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+                  <span className="eyebrow" style={{ fontSize: 10 }}>§ {deptIdx + 1}</span>
+                  <h3 className="display" style={{
+                    fontSize: 15, margin: 0, color: 'var(--ink)',
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }}>
+                    {dept}
+                  </h3>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--ink-3)' }}>
+                  <span style={{ fontSize: 11, fontVariantNumeric: 'tabular-nums' }}>{deptRules.length}</span>
+                  {isExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
                 </div>
               </div>
-              <div className="flex items-center gap-2 mt-1">
-                <span className="text-[10px] text-slate-500">
-                  {activeCount} active
-                </span>
-                {riskCounts.high > 0 && (
-                  <span className="text-[10px] text-slate-500 font-medium">
-                    {riskCounts.high} high
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 10.5, color: 'var(--ink-4)' }}>{activeCount} active</span>
+                {riskCounts.critical > 0 && (
+                  <span className="pill crit" style={{ fontSize: 9.5, padding: '1px 5px' }}>
+                    {riskCounts.critical} critical
                   </span>
                 )}
-                {riskCounts.critical > 0 && (
-                  <span className="text-[10px] text-slate-600 font-medium">
-                    {riskCounts.critical} critical
+                {riskCounts.high > 0 && (
+                  <span className="pill high" style={{ fontSize: 9.5, padding: '1px 5px' }}>
+                    {riskCounts.high} high
                   </span>
                 )}
               </div>
             </div>
 
             {/* Rules list */}
-            <div className="flex-1 overflow-y-auto px-2 py-2">
+            <div style={{ flex: 1, overflowY: 'auto', padding: '10px 10px 14px' }}>
               {isExpanded && deptRules.map((rule, ruleIdx) => {
                 const actorType = getActorType(rule.actors)
                 const actor = ACTOR_CONFIG[actorType] || ACTOR_CONFIG.automated
                 const ActorIcon = actor.icon
                 const isSelected = selectedRuleId === rule.rule_id
+                const riskClass = RISK_PILL[rule.risk_level]
 
                 return (
                   <div key={rule.rule_id}>
-                    {/* Rule card */}
                     <div
-                      className={clsx(
-                        'rounded-lg border px-3 py-2.5 cursor-pointer transition-all duration-100',
-                        isSelected
-                          ? 'border-2 border-slate-400 bg-slate-50 shadow-sm'
-                          : 'border-slate-200 hover:shadow-sm'
-                      )}
-                      style={isSelected ? {} : {
-                        backgroundColor: 'white',
-                      }}
                       onClick={() => onSelectRule?.(rule)}
+                      style={{
+                        padding: '10px 12px',
+                        cursor: 'pointer',
+                        background: isSelected ? 'var(--accent-wash)' : 'var(--vellum)',
+                        border: isSelected
+                          ? '1px solid var(--accent)'
+                          : '1px solid var(--rule-soft)',
+                        borderRadius: 'var(--radius)',
+                        transition: 'border-color 80ms, background 80ms',
+                      }}
                     >
                       {/* Step number + title */}
-                      <div className="flex items-start gap-2">
-                        <div
-                          className="flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center mt-0.5 text-[9px] font-bold border-2 border-slate-300 bg-slate-50 text-slate-500"
-                        >
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                        <div style={{
+                          flexShrink: 0,
+                          width: 20, height: 20,
+                          borderRadius: '50%',
+                          border: '1px solid var(--rule)',
+                          background: 'var(--paper-2)',
+                          color: 'var(--ink-4)',
+                          fontSize: 10, fontWeight: 600,
+                          fontFamily: 'var(--ff-mono)',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          marginTop: 1,
+                        }}>
                           {ruleIdx + 1}
                         </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-semibold text-slate-800 leading-snug line-clamp-2">
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <p style={{
+                            margin: 0,
+                            fontSize: 12.5,
+                            fontWeight: 500,
+                            color: 'var(--ink)',
+                            lineHeight: 1.35,
+                            display: '-webkit-box',
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: 'vertical',
+                            overflow: 'hidden',
+                          }}>
                             {rule.title}
                           </p>
-                          <div className="flex items-center gap-1.5 mt-1">
-                            <ActorIcon size={10} style={{ color: actor.color }} />
-                            <span className="text-[10px] font-medium" style={{ color: actor.color }}>
-                              {actor.label}
-                            </span>
-                            <span className="text-[10px] text-slate-300 mx-0.5">|</span>
-                            <code className="text-[9px] font-mono text-slate-400">
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, color: 'var(--ink-4)' }}>
+                            <ActorIcon size={10} />
+                            <span style={{ fontSize: 10 }}>{actor.label}</span>
+                            <span style={{ color: 'var(--ink-5)' }}>·</span>
+                            <code className="mono" style={{ fontSize: 9.5, color: 'var(--ink-4)' }}>
                               {rule.rule_id}
                             </code>
                           </div>
                         </div>
                       </div>
 
-                      {/* Description (truncated) */}
                       {rule.description && (
-                        <p className="text-[10px] text-slate-500 leading-relaxed mt-1.5 ml-7 line-clamp-2">
+                        <p style={{
+                          margin: '6px 0 0 30px',
+                          fontSize: 10.5, color: 'var(--ink-3)',
+                          lineHeight: 1.45,
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden',
+                        }}>
                           {rule.description}
                         </p>
                       )}
 
                       {/* Tags row */}
-                      <div className="flex items-center gap-1.5 mt-2 ml-7 flex-wrap">
-                        <StatusBadge status={rule.status} size="xs" />
-                        <RiskBadge level={rule.risk_level} size="xs" />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 8, marginLeft: 30, flexWrap: 'wrap' }}>
+                        {rule.status && (
+                          <span className={`pill ${rule.status === 'active' ? 'active' : rule.status === 'paused' ? 'paused' : 'planned'}`}
+                                style={{ fontSize: 9.5, padding: '1px 5px' }}>
+                            <span className="dot" />{rule.status}
+                          </span>
+                        )}
+                        {riskClass && (
+                          <span className={`pill ${riskClass}`} style={{ fontSize: 9.5, padding: '1px 5px' }}>
+                            {rule.risk_level}
+                          </span>
+                        )}
                         {rule.editable_fields?.length > 0 && (
-                          <span className="text-[9px] font-medium px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200">
+                          <span className="pill planned" style={{ fontSize: 9.5, padding: '1px 5px' }}>
                             {rule.editable_fields.length} editable
                           </span>
                         )}
                         {rule.customer_facing && (
-                          <span className="text-[9px] font-medium px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200">
+                          <span className="pill planned" style={{ fontSize: 9.5, padding: '1px 5px' }}>
                             customer
                           </span>
                         )}
@@ -524,15 +566,21 @@ function PipelineView({ rules, onSelectRule, selectedRuleId }) {
 
                       {/* Downstream links */}
                       {rule.downstream_rule_ids?.length > 0 && (
-                        <div className="mt-2 ml-7 flex flex-wrap gap-1">
+                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6, marginLeft: 30 }}>
                           {rule.downstream_rule_ids.map(did => (
-                            <span
-                              key={did}
-                              className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-slate-50 text-slate-500 border border-slate-200"
-                              title={`Downstream: ${did}`}
-                            >
+                            <code key={did}
+                                  className="mono"
+                                  title={`Downstream: ${did}`}
+                                  style={{
+                                    fontSize: 9.5,
+                                    padding: '1px 5px',
+                                    borderRadius: 3,
+                                    border: '1px solid var(--rule-soft)',
+                                    background: 'var(--paper-2)',
+                                    color: 'var(--ink-4)',
+                                  }}>
                               → {did}
-                            </span>
+                            </code>
                           ))}
                         </div>
                       )}
@@ -540,8 +588,8 @@ function PipelineView({ rules, onSelectRule, selectedRuleId }) {
 
                     {/* Connector arrow between rules */}
                     {ruleIdx < deptRules.length - 1 && (
-                      <div className="flex justify-center py-1">
-                        <ArrowDown size={14} className="text-slate-200" />
+                      <div style={{ display: 'flex', justifyContent: 'center', padding: '4px 0' }}>
+                        <ArrowDown size={13} style={{ color: 'var(--ink-5)' }} />
                       </div>
                     )}
                   </div>
@@ -549,7 +597,13 @@ function PipelineView({ rules, onSelectRule, selectedRuleId }) {
               })}
 
               {isExpanded && deptRules.length === 0 && (
-                <div className="flex items-center justify-center py-8 text-slate-400 text-xs">
+                <div style={{
+                  padding: '32px 12px',
+                  textAlign: 'center',
+                  color: 'var(--ink-4)',
+                  fontSize: 11.5,
+                  fontStyle: 'italic',
+                }}>
                   No rules in this department
                 </div>
               )}
@@ -557,8 +611,15 @@ function PipelineView({ rules, onSelectRule, selectedRuleId }) {
 
             {/* Phase footer — forward arrow */}
             {deptIdx < departments.length - 1 && (
-              <div className="flex-shrink-0 flex items-center justify-end px-2 py-1.5 border-t border-slate-100">
-                <ArrowRight size={16} className="text-slate-200" />
+              <div style={{
+                flexShrink: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'flex-end',
+                padding: '6px 10px',
+                borderTop: '1px solid var(--rule-hair)',
+              }}>
+                <ArrowRight size={14} style={{ color: 'var(--ink-5)' }} />
               </div>
             )}
           </div>
